@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { useToast } from '../hooks/use-toast'
 import { CollaborationPanel } from '../components/CollaborationPanel'
+import { GuestLogin } from '../components/GuestLogin'
 
 interface List {
   id: string
@@ -27,45 +28,49 @@ interface User {
   displayName?: string
 }
 
-export default function Dashboard() {
+interface DashboardProps {
+  user: User | null
+}
+
+export default function Dashboard({ user }: DashboardProps) {
   const navigate = useNavigate()
-  const [user, setUser] = useState<User | null>(null)
   const [lists, setLists] = useState<List[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedListForCollab, setSelectedListForCollab] = useState<string | null>(null)
   const { toast } = useToast()
 
-  // Get current user
-  useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-    })
-    return unsubscribe
-  }, [])
-
   const loadLists = useCallback(async () => {
-    if (!user) return
-
     try {
-      const listsData = await blink.db.lists.list({
-        where: { userId: user.id },
-        orderBy: { createdAt: 'desc' }
-      })
-
-      // Get item counts for each list
-      const listsWithCounts = await Promise.all(
-        listsData.map(async (list) => {
-          const items = await blink.db.listItems.list({
-            where: { listId: list.id }
-          })
-          return {
-            ...list,
-            itemCount: items.length
-          }
+      if (user) {
+        // Authenticated user - load from database
+        const listsData = await blink.db.lists.list({
+          where: { userId: user.id },
+          orderBy: { createdAt: 'desc' }
         })
-      )
 
-      setLists(listsWithCounts)
+        // Get item counts for each list
+        const listsWithCounts = await Promise.all(
+          listsData.map(async (list) => {
+            const items = await blink.db.listItems.list({
+              where: { listId: list.id }
+            })
+            return {
+              ...list,
+              itemCount: items.length
+            }
+          })
+        )
+
+        setLists(listsWithCounts)
+      } else {
+        // Guest user - load from localStorage
+        const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+        const listsWithCounts = guestLists.map((list: any) => ({
+          ...list,
+          itemCount: list.items?.length || 0
+        }))
+        setLists(listsWithCounts)
+      }
     } catch (error) {
       console.error('Failed to load lists:', error)
       toast({
@@ -79,14 +84,21 @@ export default function Dashboard() {
   }, [user, toast])
 
   useEffect(() => {
-    if (user) {
-      loadLists()
-    }
-  }, [user, loadLists])
+    loadLists()
+  }, [loadLists])
 
   const deleteList = async (listId: string) => {
     try {
-      await blink.db.lists.delete(listId)
+      if (user) {
+        // Authenticated user - delete from database
+        await blink.db.lists.delete(listId)
+      } else {
+        // Guest user - delete from localStorage
+        const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+        const updatedLists = guestLists.filter((list: any) => list.id !== listId)
+        localStorage.setItem('guestLists', JSON.stringify(updatedLists))
+      }
+      
       setLists(lists.filter(list => list.id !== listId))
       toast({
         title: 'Success',
@@ -144,7 +156,7 @@ export default function Dashboard() {
     return flags[languageCode] || '🌐'
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-background p-4">
         <div className="max-w-6xl mx-auto">
@@ -173,22 +185,27 @@ export default function Dashboard() {
                 Create and manage lists for your WhatsApp groups
               </p>
             </div>
-            <Button 
-              onClick={() => navigate('/create')}
-              className="bg-primary hover:bg-primary/90"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New List
-            </Button>
+            <div className="flex items-center gap-4">
+              <div className="w-64">
+                <GuestLogin user={user} />
+              </div>
+              <Button 
+                onClick={() => navigate('/create')}
+                className="bg-primary hover:bg-primary/90"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New List
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Content */}
       <div className="max-w-6xl mx-auto p-4">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className={`grid grid-cols-1 gap-6 ${user ? 'lg:grid-cols-4' : ''}`}>
           {/* Lists */}
-          <div className="lg:col-span-3">
+          <div className={user ? 'lg:col-span-3' : ''}>
             {lists.length === 0 ? (
               <div className="text-center py-12">
                 <MessageSquare className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
@@ -248,13 +265,15 @@ export default function Dashboard() {
                           <Edit3 className="w-4 h-4 mr-2" />
                           Edit
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelectedListForCollab(list.id)}
-                        >
-                          <Users className="w-4 h-4" />
-                        </Button>
+                        {user && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedListForCollab(list.id)}
+                          >
+                            <Users className="w-4 h-4" />
+                          </Button>
+                        )}
                         {list.isShared && list.shareToken && (
                           <Button
                             variant="outline"
@@ -281,38 +300,40 @@ export default function Dashboard() {
           </div>
 
           {/* Collaboration Panel */}
-          <div className="lg:col-span-1">
-            {selectedListForCollab ? (
-              <div className="space-y-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setSelectedListForCollab(null)}
-                  className="w-full"
-                >
-                  ← Back to Lists
-                </Button>
-                <CollaborationPanel
-                  listId={selectedListForCollab}
-                  currentUser={user}
-                  isOwner={true}
-                />
-              </div>
-            ) : (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Users className="w-5 h-5" />
-                    Collaboration
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Click the <Users className="w-4 h-4 inline mx-1" /> button on any list to manage collaborators and share with others.
-                  </p>
-                </CardContent>
-              </Card>
-            )}
-          </div>
+          {user && (
+            <div className="lg:col-span-1">
+              {selectedListForCollab ? (
+                <div className="space-y-4">
+                  <Button
+                    variant="outline"
+                    onClick={() => setSelectedListForCollab(null)}
+                    className="w-full"
+                  >
+                    ← Back to Lists
+                  </Button>
+                  <CollaborationPanel
+                    listId={selectedListForCollab}
+                    currentUser={user}
+                    isOwner={true}
+                  />
+                </div>
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Users className="w-5 h-5" />
+                      Collaboration
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">
+                      Click the <Users className="w-4 h-4 inline mx-1" /> button on any list to manage collaborators and share with others.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

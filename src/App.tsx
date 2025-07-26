@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import CreateList from './pages/CreateList'
 import ListEditor from './pages/ListEditor'
 import SharedList from './pages/SharedList'
+import { GuestLogin } from './components/GuestLogin'
 import { Toaster } from './components/ui/toaster'
 
 interface User {
@@ -43,39 +44,14 @@ function App() {
           {/* Public shared list route */}
           <Route path="/shared/:shareToken" element={<SharedList />} />
           
-          {/* Protected routes */}
-          {user ? (
-            <>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/create" element={<CreateList />} />
-              <Route path="/edit/:listId" element={<ListEditor />} />
-            </>
-          ) : (
-            <Route path="/*" element={<SignInPage />} />
-          )}
+          {/* Main app routes - work for both guest and authenticated users */}
+          <Route path="/" element={<Dashboard user={user} />} />
+          <Route path="/create" element={<CreateList user={user} />} />
+          <Route path="/edit/:listId" element={<ListEditor user={user} />} />
         </Routes>
         <Toaster />
       </div>
     </Router>
-  )
-}
-
-function SignInPage() {
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-center max-w-md mx-auto p-6">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-primary mb-2">WhatsApp List Manager</h1>
-          <p className="text-muted-foreground">Create and share lists with your WhatsApp groups effortlessly</p>
-        </div>
-        <button
-          onClick={() => blink.auth.login()}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-lg font-medium transition-colors"
-        >
-          Sign In to Get Started
-        </button>
-      </div>
-    </div>
   )
 }
 

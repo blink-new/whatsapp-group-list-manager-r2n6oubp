@@ -11,11 +11,16 @@ import { Badge } from '../components/ui/badge'
 import { useToast } from '../hooks/use-toast'
 import { LanguageSelector } from '../components/LanguageSelector'
 import { ImageUpload } from '../components/ImageUpload'
+import { GuestLogin } from '../components/GuestLogin'
 
 interface User {
   id: string
   email: string
   displayName?: string
+}
+
+interface CreateListProps {
+  user: User | null
 }
 
 const templates = [
@@ -56,9 +61,8 @@ interface UploadedImage {
   size: number
 }
 
-export default function CreateList() {
+export default function CreateList({ user }: CreateListProps) {
   const navigate = useNavigate()
-  const [user, setUser] = useState<User | null>(null)
   const [selectedTemplate, setSelectedTemplate] = useState('custom')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -67,14 +71,6 @@ export default function CreateList() {
   const [images, setImages] = useState<UploadedImage[]>([])
   const [loading, setLoading] = useState(false)
   const { toast } = useToast()
-
-  // Get current user
-  useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-    })
-    return unsubscribe
-  }, [])
 
   const handleTemplateSelect = (templateId: string) => {
     setSelectedTemplate(templateId)
@@ -104,8 +100,6 @@ export default function CreateList() {
   }
 
   const createList = async () => {
-    if (!user) return
-
     if (!title.trim()) {
       toast({
         title: 'Error',
@@ -127,13 +121,12 @@ export default function CreateList() {
 
     setLoading(true)
     try {
-      // Create the list
       const listId = `list_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       const shareToken = Math.random().toString(36).substr(2, 15)
       
-      await blink.db.lists.create({
+      const listData = {
         id: listId,
-        userId: user.id,
+        userId: user?.id || 'guest',
         title: title.trim(),
         description: description.trim(),
         templateType: selectedTemplate,
@@ -142,36 +135,51 @@ export default function CreateList() {
         shareToken,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      })
+      }
 
-      // Create list items
-      const itemPromises = validItems.map((item, index) =>
-        blink.db.listItems.create({
-          id: `item_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
-          listId,
-          content: item.trim(),
-          isChecked: false,
-          orderIndex: index,
-          createdAt: new Date().toISOString()
-        })
-      )
+      const itemsData = validItems.map((item, index) => ({
+        id: `item_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`,
+        listId,
+        content: item.trim(),
+        isChecked: false,
+        orderIndex: index,
+        createdAt: new Date().toISOString()
+      }))
 
-      await Promise.all(itemPromises)
-
-      // Save images if any
-      if (images.length > 0) {
-        const imagePromises = images.map((image) =>
-          blink.db.listImages.create({
-            id: image.id,
-            listId,
-            userId: user.id,
-            filename: image.filename,
-            url: image.url,
-            size: image.size,
-            createdAt: new Date().toISOString()
-          })
+      if (user) {
+        // Authenticated user - save to database
+        await blink.db.lists.create(listData)
+        
+        const itemPromises = itemsData.map((item) =>
+          blink.db.listItems.create(item)
         )
-        await Promise.all(imagePromises)
+        await Promise.all(itemPromises)
+
+        // Save images if any
+        if (images.length > 0) {
+          const imagePromises = images.map((image) =>
+            blink.db.listImages.create({
+              id: image.id,
+              listId,
+              userId: user.id,
+              filename: image.filename,
+              url: image.url,
+              size: image.size,
+              createdAt: new Date().toISOString()
+            })
+          )
+          await Promise.all(imagePromises)
+        }
+      } else {
+        // Guest user - save to localStorage
+        const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+        const newList = {
+          ...listData,
+          items: itemsData,
+          images: images
+        }
+        guestLists.push(newList)
+        localStorage.setItem('guestLists', JSON.stringify(guestLists))
       }
 
       toast({
@@ -192,16 +200,7 @@ export default function CreateList() {
     }
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    )
-  }
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -222,6 +221,9 @@ export default function CreateList() {
               <p className="text-muted-foreground mt-1">
                 Choose a template or create a custom list
               </p>
+            </div>
+            <div className="w-64">
+              <GuestLogin user={user} />
             </div>
             <LanguageSelector
               selectedLanguage={language}

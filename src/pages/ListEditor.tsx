@@ -14,11 +14,16 @@ import { useToast } from '../hooks/use-toast'
 import { LanguageSelector } from '../components/LanguageSelector'
 import { ImageUpload } from '../components/ImageUpload'
 import { CollaborationPanel } from '../components/CollaborationPanel'
+import { GuestLogin } from '../components/GuestLogin'
 
 interface User {
   id: string
   email: string
   displayName?: string
+}
+
+interface ListEditorProps {
+  user: User | null
 }
 
 interface List {
@@ -46,10 +51,9 @@ interface ListItem {
   orderIndex: number
 }
 
-export default function ListEditor() {
+export default function ListEditor({ user }: ListEditorProps) {
   const { listId } = useParams<{ listId: string }>()
   const navigate = useNavigate()
-  const [user, setUser] = useState<User | null>(null)
   const [list, setList] = useState<List | null>(null)
   const [items, setItems] = useState<ListItem[]>([])
   const [images, setImages] = useState<UploadedImage[]>([])
@@ -58,45 +62,58 @@ export default function ListEditor() {
   const [showCollaboration, setShowCollaboration] = useState(false)
   const { toast } = useToast()
 
-  // Get current user
-  useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-    })
-    return unsubscribe
-  }, [])
-
   const loadList = useCallback(async () => {
-    if (!listId || !user) return
+    if (!listId) return
 
     try {
-      const listData = await blink.db.lists.list({
-        where: { id: listId, userId: user.id }
-      })
-
-      if (listData.length === 0) {
-        toast({
-          title: 'Error',
-          description: 'List not found',
-          variant: 'destructive'
+      if (user) {
+        // Authenticated user - load from database
+        const listData = await blink.db.lists.list({
+          where: { id: listId, userId: user.id }
         })
-        navigate('/')
-        return
+
+        if (listData.length === 0) {
+          toast({
+            title: 'Error',
+            description: 'List not found',
+            variant: 'destructive'
+          })
+          navigate('/')
+          return
+        }
+
+        const itemsData = await blink.db.listItems.list({
+          where: { listId },
+          orderBy: { orderIndex: 'asc' }
+        })
+
+        const imagesData = await blink.db.listImages.list({
+          where: { listId },
+          orderBy: { createdAt: 'asc' }
+        })
+
+        setList(listData[0])
+        setItems(itemsData)
+        setImages(imagesData)
+      } else {
+        // Guest user - load from localStorage
+        const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+        const guestList = guestLists.find((list: any) => list.id === listId)
+        
+        if (!guestList) {
+          toast({
+            title: 'Error',
+            description: 'List not found',
+            variant: 'destructive'
+          })
+          navigate('/')
+          return
+        }
+
+        setList(guestList)
+        setItems(guestList.items || [])
+        setImages(guestList.images || [])
       }
-
-      const itemsData = await blink.db.listItems.list({
-        where: { listId },
-        orderBy: { orderIndex: 'asc' }
-      })
-
-      const imagesData = await blink.db.listImages.list({
-        where: { listId },
-        orderBy: { createdAt: 'asc' }
-      })
-
-      setList(listData[0])
-      setItems(itemsData)
-      setImages(imagesData)
     } catch (error) {
       console.error('Failed to load list:', error)
       toast({
@@ -110,21 +127,62 @@ export default function ListEditor() {
   }, [listId, user, toast, navigate])
 
   useEffect(() => {
-    if (user) {
-      loadList()
+    loadList()
+  }, [loadList])
+
+  // Helper function to save guest list data
+  const saveGuestListData = useCallback(() => {
+    if (user || !list) return
+    
+    const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+    const listIndex = guestLists.findIndex((l: any) => l.id === list.id)
+    
+    if (listIndex !== -1) {
+      guestLists[listIndex] = {
+        ...list,
+        items,
+        images
+      }
+      localStorage.setItem('guestLists', JSON.stringify(guestLists))
     }
-  }, [user, loadList])
+  }, [user, list, items, images])
+
+  // Save guest data when items or images change
+  useEffect(() => {
+    if (!user && list) {
+      saveGuestListData()
+    }
+  }, [items, images, saveGuestListData, user, list])
 
   const updateList = async (updates: Partial<List>) => {
     if (!list) return
 
     setSaving(true)
     try {
-      await blink.db.lists.update(list.id, {
-        ...updates,
-        updatedAt: new Date().toISOString()
-      })
-      setList({ ...list, ...updates })
+      const updatedList = { ...list, ...updates, updatedAt: new Date().toISOString() }
+      
+      if (user) {
+        // Authenticated user - update database
+        await blink.db.lists.update(list.id, {
+          ...updates,
+          updatedAt: new Date().toISOString()
+        })
+      } else {
+        // Guest user - update localStorage
+        const guestLists = JSON.parse(localStorage.getItem('guestLists') || '[]')
+        const listIndex = guestLists.findIndex((l: any) => l.id === list.id)
+        
+        if (listIndex !== -1) {
+          guestLists[listIndex] = {
+            ...guestLists[listIndex],
+            ...updates,
+            updatedAt: new Date().toISOString()
+          }
+          localStorage.setItem('guestLists', JSON.stringify(guestLists))
+        }
+      }
+      
+      setList(updatedList)
       toast({
         title: 'Success',
         description: 'List updated successfully'
@@ -242,26 +300,34 @@ export default function ListEditor() {
   const generateWhatsAppMessage = () => {
     if (!list) return ''
 
-    let message = `*${list.title}*\\n`
+    let message = `*${list.title}*`
     if (list.description) {
-      message += `_${list.description}_\\n`
+      message += `
+_${list.description}_`
     }
-    message += '\\n'
+    message += `
+
+`
 
     items.forEach((item, index) => {
       const checkbox = Number(item.isChecked) > 0 ? '✅' : '☐'
-      message += `${checkbox} ${index + 1}. ${item.content}\\n`
+      message += `${checkbox} ${index + 1}. ${item.content}
+`
     })
 
     // Add images if any
     if (images.length > 0) {
-      message += '\\n📸 *Images:*\\n'
+      message += `
+📸 *Images:*
+`
       images.forEach((image, index) => {
-        message += `${index + 1}. ${image.url}\\n`
+        message += `${index + 1}. ${image.url}
+`
       })
     }
 
-    message += `\\n_Created with WhatsApp List Manager_`
+    message += `
+_Created with WhatsApp List Manager_`
     return message
   }
 
@@ -290,7 +356,7 @@ export default function ListEditor() {
     window.open(`https://wa.me/?text=${message}`, '_blank')
   }
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -337,13 +403,18 @@ export default function ListEditor() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setShowCollaboration(!showCollaboration)}
-              >
-                <Users className="w-4 h-4 mr-2" />
-                Collaborate
-              </Button>
+              <div className="w-64">
+                <GuestLogin user={user} />
+              </div>
+              {user && (
+                <Button
+                  variant="outline"
+                  onClick={() => setShowCollaboration(!showCollaboration)}
+                >
+                  <Users className="w-4 h-4 mr-2" />
+                  Collaborate
+                </Button>
+              )}
               <LanguageSelector
                 selectedLanguage={list.language || 'en'}
                 onLanguageChange={(language) => updateList({ language })}
@@ -368,9 +439,9 @@ export default function ListEditor() {
       </div>
 
       <div className="max-w-6xl mx-auto p-4">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className={`grid grid-cols-1 gap-6 ${user && showCollaboration ? 'lg:grid-cols-4' : ''}`}>
           {/* Editor */}
-          <div className={`space-y-6 ${showCollaboration ? 'lg:col-span-3' : 'lg:col-span-4'}`}>
+          <div className={`space-y-6 ${user && showCollaboration ? 'lg:col-span-3' : ''}`}>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Left Column */}
               <div className="space-y-6">
@@ -570,7 +641,7 @@ export default function ListEditor() {
           </div>
 
           {/* Collaboration Panel */}
-          {showCollaboration && (
+          {user && showCollaboration && (
             <div className="lg:col-span-1">
               <CollaborationPanel
                 listId={list.id}

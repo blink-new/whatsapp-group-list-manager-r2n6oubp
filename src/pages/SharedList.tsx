@@ -1,3 +1,29 @@
+const generateWhatsAppMessage = () => {
+  if (!list) return ''
+
+  let message = `*${list.title}*\n`
+  if (list.description) {
+    message += `_${list.description}_\n`
+  }
+  message += '\n'
+
+  items.forEach((item, index) => {
+    const checkbox = Number(item.isChecked) > 0 ? '✅' : '☐'
+    message += `${checkbox} ${index + 1}. ${item.content}\n`
+  })
+
+  // Add images if any
+  if (images.length > 0) {
+    message += '\n📸 *Images:*\n'
+    images.forEach((image, index) => {
+      message += `${index + 1}. ${image.url}\n`
+    })
+  }
+
+  message += `\n_Shared via WhatsApp List Manager_`
+  return message
+}
+
 import { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Plus, X, Copy, MessageSquare, Check, GripVertical, Image as ImageIcon, Users } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
@@ -287,26 +313,26 @@ export default function SharedList() {
   const generateWhatsAppMessage = () => {
     if (!list) return ''
 
-    let message = `*${list.title}*\\n`
+    let message = `*${list.title}*\n`
     if (list.description) {
-      message += `_${list.description}_\\n`
+      message += `_${list.description}_\n`
     }
-    message += '\\n'
+    message += '\n'
 
     items.forEach((item, index) => {
       const checkbox = Number(item.isChecked) > 0 ? '✅' : '☐'
-      message += `${checkbox} ${index + 1}. ${item.content}\\n`
+      message += `${checkbox} ${index + 1}. ${item.content}\n`
     })
 
     // Add images if any
     if (images.length > 0) {
-      message += '\\n📸 *Images:*\\n'
+      message += '\n📸 *Images:*\n'
       images.forEach((image, index) => {
-        message += `${index + 1}. ${image.url}\\n`
+        message += `${index + 1}. ${image.url}\n`
       })
     }
 
-    message += `\\n_Shared via WhatsApp List Manager_`
+    message += `\n_Shared via WhatsApp List Manager_`
     return message
   }
 
